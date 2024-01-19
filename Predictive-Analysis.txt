@@ -1,0 +1,580 @@
+
+import pyspark
+from pyspark.sql import SparkSession
+from pyspark.sql.window import Window
+from pyspark.sql.functions import row_number
+from pyspark.sql.functions import *
+from pyspark.sql.functions import log
+from pyspark.sql.functions import lag
+from pyspark.sql.functions import col
+
+spark=3DSparkSession.builder.appName('price_model').getOrCreate()
+
+dataframe =3D
+spark.read.csv("/Internship/solar_Data_View/solar_Data/Solar_typical_src.cs=
+v"
+, inferSchema =3D True , header =3D True)
+
+df=3Ddataframe.select('VPJ_Job_Code', 'Job'
+,'VPJ_Valuation_Year','VPJ_Org_contract_value','VPJ_Valuation_Month'
+,'VPJ_Rev_contract_value', 'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_Expected_End_Date','VPJ_wi=
+p_rsv','VPJ_Expected_certified','VPJ_rev_cost','VPJ_CostCompPC','VPJ_Cum_Co=
+st_AC','VPJ_Contract_Start_Date')\
+.where("(VPJ_Rev_contract_value-VPJ_Invoice_certified!=3D0 or
+VPJ_Rev_contract_value-VPJ_Expected_certified!=3D0) and VPJ_rev_cost!=3D0  =
+and
+VPJ_Job_Code in('J384','G755','J353','J082','H653','K081') ")
+
+df1=3Ddataframe.select('VPJ_Job_Code', 'Job' ,'VPJ_Valuation_Year',
+'VPJ_Org_contract_value' ,'VPJ_Valuation_Month' ,'VPJ_Rev_contract_value',
+'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_Expected_End_Date','VPJ_wi=
+p_rsv','VPJ_Expected_certified','VPJ_rev_cost','VPJ_CostCompPC','VPJ_Cum_Co=
+st_AC','VPJ_Contract_Start_Date')\
+.where("(VPJ_Rev_contract_value-VPJ_Invoice_certified=3D0 or
+VPJ_Rev_contract_value-VPJ_Expected_certified=3D0) and VPJ_Job_Code
+in('J384','G755','J353','J082','H653','K081')  ")
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code','Job','VPJ_Rev_contract_valu=
+e','VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_rev_cost','V=
+PJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date').orderBy('VPJ_Va=
+luation_Year','VPJ_Valuation_Month')
+
+df_row=3Ddf1.withColumn("row_number",row_number().over(windowSpec))
+df_test=3Ddf_row.select("*").where("row_number=3D'1'")
+df_test=3Ddf_test.drop("row_number")
+
+df3=3Ddf.union(df_test)
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code').orderBy('VPJ_Valuation_Year=
+','VPJ_Valuation_Month')
+df4 =3D df3.withColumn("Month",row_number().over(windowSpec))
+
+#df6 =3D df4.select([max("Month")])
+
+#df_collect=3Ddf6.collect()[0][0]
+
+df6 =3D
+df4.select("*").groupby('VPJ_Job_Code').agg(max('Month').alias("Month_max")=
+)
+df6.createOrReplaceTempView("df6")
+
+df_6=3Dspark.sql("Select VPJ_Job_Code as Job_Code , Month_max from df6")
+
+df_collect=3Ddf4.join(df_6,df4.VPJ_Job_Code=3D=3Ddf_6.Job_Code,"left")
+
+df5 =3D df_collect.withColumn("POT",
+((df_collect["Month"]/df_collect['Month_max'])*100))
+
+df7 =3D df5.withColumn("sales" , df5['VPJ_wip_cost'] +
+df5['VPJ_wip_rsv']).withColumn("CC" ,
+(df5["VPJ_Cum_Cost_AC"]/(df5['VPJ_rev_cost']+
+df5['VPJ_Contingency_calculated']))*100)
+
+df9 =3D df7.withColumn("logval" , log('sales'))
+
+df10 =3D df9.withColumn("VPJ_Cost_M" , col('VPJ_Cum_Cost_AC') -
+lag(col('VPJ_Cum_Cost_AC'), 1,0).over(windowSpec))
+#df5.repartition(1).write.format('csv').mode('overwrite').save("/Internship=
+/8922_HYD/",header=3DTrue)
+
+df11 =3D df10.withColumn("SOI" , df10["sales"] -
+df10["VPJ_Expected_certified"])
+
+df12 =3D df11.withColumn("SP" ,(df11["sales"] /
+df11["VPJ_Org_contract_value"])*100)
+
+df13 =3D df12.where('CC >=3D 25')
+
+df14 =3D df12.withColumn("CP" , (df13["VPJ_Cum_Cost_AC"] /
+df13["VPJ_Org_contract_value"])*100
+).select('VPJ_Job_Code','VPJ_Cost_M','CC','POT','SOI','VPJ_Cum_Cost_AC','SP=
+','CP')
+
+df14.repartition(1).write.format('csv').mode('overwrite').save("/Internship=
+/Test/Mod1",header=3DTrue)
+
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+
+
+
+df14.show(5)
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
++------------+----------+-------------------+----+------------+------------=
+---+------------------+------------------+
+|VPJ_Job_Code|VPJ_Cost_M|                 CC| POT|
+SOI|VPJ_Cum_Cost_AC|                SP|                CP|
++------------+----------+-------------------+----+------------+------------=
+---+------------------+------------------+
+|        J384|         0|                0.0| 2.5|         0.0|
+ 0|               0.0|               0.0|
+|        J384|   2631202|0.28876233109667626| 5.0|   2631203.0|
+ 2631202| 0.268549069935981|0.2685489678727537|
+|        J384|   9922247|  1.377683354050065| 7.5|  1.255345E7|
+12553449|1.2812456211048107| 1.281245519041583|
+|        J384|  31607735|  5.383929778184517|10.0|-5.9971166E7|
+44161184| 4.501891482677934| 4.507232961680161|
+|        J384|  49663669| 11.438697386385403|12.5|-8.7009523E7|
+93824853| 9.570725719720587| 9.576067300786043|
++------------+----------+-------------------+----+------------+------------=
+---+------------------+------------------+
+only showing top 5 rows
+
+
+
+#import six
+#for i in df14.columns:
+   # if not (isinstance(df14.select(i).take(1)[0][0],six.string_types)):
+      #  print("Correlation to SP for " ,i,df14.stat.corr('SP', i))
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+
+
+
+
+df_fin =3D df14.select('SP','POT' ,'CC','CP').where('SP !=3D0')
+from pyspark.ml.linalg import Vectors
+from pyspark.ml.feature import VectorAssembler
+
+df8 =3D df_fin.drop('SP')
+assembler =3D VectorAssembler(inputCols =3D df8.columns, outputCol =3D 'fea=
+tures')
+output=3Dassembler.transform(df_fin)
+#vector_col=3Doutput.select('features')
+
+print(df_fin.count())
+df8.show(10)
+print(assembler)
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+278
++------------------+-------------------+------------------+
+|               POT|                 CC|                CP|
++------------------+-------------------+------------------+
+|               5.0|0.28876233109667626|0.2685489678727537|
+|               7.5|  1.377683354050065| 1.281245519041583|
+|              10.0|  5.383929778184517| 4.507232961680161|
+|              12.5| 11.438697386385403| 9.576067300786043|
+|              15.0|  57.60810346560847| 47.40446568587961|
+|              17.5|   64.1266636654239|54.618309902929994|
+|              20.0|  82.03090822286975| 69.86781021871974|
+|              22.5|  87.26379054432446| 76.81706817476163|
+|              25.0|  86.99616418879977| 76.58148052615455|
+|27.500000000000004|  94.97353697436898|  77.1953854291834|
++------------------+-------------------+------------------+
+only showing top 10 rows
+
+VectorAssembler_e5e314f4651b
+
+
+
+
+
+from pyspark.ml.stat import Correlation
+from pyspark.ml.linalg import Vectors
+
+vector_col=3Doutput.select('features')
+matrix=3DCorrelation.corr(vector_col,'features')
+dfm=3Dmatrix.collect()[0][matrix.columns[0]].toArray()
+
+#output.show()
+dfm =3D dfm.tolist()
+
+mat =3D spark.createDataFrame(dfm , df8.columns)
+
+namecol =3D mat.columns
+
+pd_df=3Dmat.toPandas()
+pd_df['Names']=3Dnamecol
+
+mat_new=3Dspark.createDataFrame(pd_df)
+
+mat_new_s=3Dmat_new.select('Names','POT')
+mat_new_s.show()
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
++-----+------------------+
+|Names|               POT|
++-----+------------------+
+|  POT|               1.0|
+|   CC|0.6834024523032113|
+|   CP|0.2298785950292954|
++-----+------------------+
+
+
+
+
+
+df_reg =3D output.select(['features' , 'SP'])
+df_reg.show(5)
+
+#print(train_df)
+#test_df.show(5)
+#print(test_df.count())
+#print(train_df.count())
+#print(df_reg.count())
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
++--------------------+------------------+
+|            features|                SP|
++--------------------+------------------+
+|[5.0,0.2887623310...| 0.268549069935981|
+|[7.5,1.3776833540...|1.2812456211048107|
+|[10.0,5.383929778...| 4.501891482677934|
+|[12.5,11.43869738...| 9.570725719720587|
+|[15.0,57.60810346...| 54.86510603309903|
++--------------------+------------------+
+only showing top 5 rows
+
+
+
+from pyspark.ml.regression import LinearRegression
+
+lr =3D LinearRegression(featuresCol =3D "features", labelCol =3D "SP" , max=
+Iter =3D
+10 , regParam =3D 0.3 , elasticNetParam =3D 0.8)
+
+lr_model =3D lr.fit(df_reg)
+
+print("Coefficients" + str(lr_model.coefficients))
+print("Intercept" + str(lr_model.intercept))
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+Coefficients[-0.022967812349807208,0.06503171993188835,1.0177132661655584]
+Intercept0.33423092432761825
+
+
+
+
+trainingSummary =3D lr_model.summary
+print("RMSE : %f" % trainingSummary.rootMeanSquaredError)
+print("r2 : %f" % trainingSummary.r2)
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+RMSE : 6.340395
+r2 : 0.980350
+
+
+
+
+tdf=3D dataframe.select('VPJ_Job_Code', 'Job' ,'VPJ_Valuation_Year'
+,'VPJ_Org_contract_value' ,'VPJ_Valuation_Month' ,'VPJ_Rev_contract_value',
+'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_Expected_cer=
+tified','VPJ_Expected_End_Date','VPJ_Expected_Completion_Date','VPJ_rev_cos=
+t','VPJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date')\
+.where("VPJ_Rev_contract_value-VPJ_Invoice_certified!=3D0 and VPJ_Job_Code=
+=3D
+'J384' and VPJ_rev_cost!=3D0  ")
+
+print(tdf.count())
+
+tdf1=3D dataframe.select('VPJ_Job_Code', 'Job' ,'VPJ_Valuation_Year'
+,'VPJ_Org_contract_value' ,'VPJ_Valuation_Month' ,'VPJ_Rev_contract_value',
+'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_Expected_cer=
+tified','VPJ_Expected_End_Date','VPJ_Expected_Completion_Date','VPJ_rev_cos=
+t','VPJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date')\
+.where("VPJ_Rev_contract_value-VPJ_Invoice_certified=3D0 and VPJ_Job_Code=
+=3D
+'J384' and VPJ_rev_cost!=3D0 ")
+
+print(tdf1.count())
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code','Job','VPJ_Rev_contract_valu=
+e','VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_rev_cost','V=
+PJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date').orderBy('VPJ_Va=
+luation_Year','VPJ_Valuation_Month')
+
+tdf_row=3Dtdf1.withColumn("row_number",row_number().over(windowSpec))
+tdf_test=3Dtdf_row.select("*").where("row_number=3D'1'")
+tdf_test=3Dtdf_test.drop("row_number")
+
+tdf3=3Dtdf.union(tdf_test)
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code').orderBy('VPJ_Valuation_Year=
+','VPJ_Valuation_Month')
+tdf4 =3D tdf3.withColumn("Month",row_number().over(windowSpec))
+
+tdf6 =3D
+tdf4.select("*").groupby('VPJ_Job_Code').agg(max('Month').alias("Month_max"=
+))
+tdf6.createOrReplaceTempView("tdf6")
+
+tdf_6=3Dspark.sql("Select VPJ_Job_Code as Job_Code , Month_max from tdf6")
+
+tdf_collect=3Dtdf4.join(tdf_6,tdf4.VPJ_Job_Code=3D=3Dtdf_6.Job_Code,"left")
+
+'''
+tdf6 =3D tdf4.select([max("Month")])
+
+tdf_collect=3Dtdf6.collect()[0][0]
+'''
+tdf_collect =3D tdf_collect.withColumn("POT",
+(tdf_collect["Month"]/tdf_collect['Month_max'])*100)
+
+#tdf5 =3D tdf4.withColumn("POT", (tdf4["Month"]/tdf_collect)*100)
+
+tdf7 =3D tdf_collect.withColumn("sales" , tdf_collect['VPJ_wip_cost'] +
+tdf_collect['VPJ_wip_rsv']).withColumn("CC" ,
+(tdf_collect["VPJ_Cum_Cost_AC"]/(tdf_collect['VPJ_rev_cost']+
+tdf_collect['VPJ_Contingency_calculated']))*100)
+
+tdf9 =3D tdf7.withColumn("logval" , log('sales'))
+
+tdf9.show(5)
+
+
+tdf10 =3D tdf9.withColumn("VPJ_Cost_M" , col('VPJ_Cum_Cost_AC') -
+lag(col('VPJ_Cum_Cost_AC'), 1,0).over(windowSpec))
+
+tdf11 =3D tdf10.withColumn("SOI" , tdf10["sales"] -
+tdf10["VPJ_Expected_certified"])
+
+tdf12 =3D tdf11.withColumn("SP" ,(tdf11["sales"] /
+tdf11["VPJ_Org_contract_value"])*100)
+
+tdf13 =3D tdf12.where('CC >=3D 25')
+
+tdf14 =3D tdf12.withColumn("CP" , (tdf13["VPJ_Cum_Cost_AC"] /
+tdf13["VPJ_Org_contract_value"])*100 ).select('SP','POT' ,'CC','CP')
+
+tdf14.repartition(1).write.format('csv').mode('overwrite').save("/Internshi=
+p/Test/Mod2",header=3DTrue)
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+38
+2
++------------+----------+------------------+----------------------+--------=
+-----------+----------------------+---------------------+------------------=
+--------+------------+-----------+----------------------+------------------=
+---+----------------------------+-------------+--------------+-------------=
+--+-----------------------+-----+--------+---------+----+--------+---------=
+----------+------------------+
+|VPJ_Job_Code|
+Job|VPJ_Valuation_Year|VPJ_Org_contract_value|VPJ_Valuation_Month|VPJ_Rev_c=
+ontract_value|VPJ_Invoice_certified|VPJ_Contingency_calculated|VPJ_wip_cost=
+|VPJ_wip_rsv|VPJ_Expected_certified|VPJ_Expected_End_Date|VPJ_Expected_Comp=
+letion_Date|
+VPJ_rev_cost|VPJ_CostCompPC|VPJ_Cum_Cost_AC|VPJ_Contract_Start_Date|Month|J=
+ob_Code|Month_max|
+POT|   sales|                 CC|            logval|
++------------+----------+------------------+----------------------+--------=
+-----------+----------------------+---------------------+------------------=
+--------+------------+-----------+----------------------+------------------=
+---+----------------------------+-------------+--------------+-------------=
+--+-----------------------+-----+--------+---------+----+--------+---------=
+----------+------------------+
+|        J384|Tamil Nadu|              2019|          9.79784812E8|
+         3|          9.79784812E8|                  0.0|
+2.9393544E7|           0|          0|                   0.0|
+14-11-2019|                  14-11-2019|8.818063308E8|           0.0|
+       0|             06-02-2019|    1|    J384|       40| 2.5|       0|
+             0.0|              null|
+|        J384|Tamil Nadu|              2019|          9.79784812E8|
+         4|          9.79784812E8|                  0.0|
+2.9393544E7|     2631203|          0|                   0.0|
+14-11-2019|                  14-11-2019| 8.81806331E8|          0.29|
+ 2631202|             06-02-2019|    2|    J384|       40| 5.0|
+2631203|0.28876233109667626|14.782951714020518|
+|        J384|Tamil Nadu|              2019|          9.79784812E8|
+         5|          9.79784812E8|                  0.0|
+2.9393544E7|    12553450|          0|                   0.0|
+14-11-2019|                  14-11-2019| 8.81806331E8|          1.38|
+12553449|             06-02-2019|    3|    J384|       40| 7.5|12553450|
+ 1.377683354050065| 16.34550608616228|
+|        J384|Tamil Nadu|              2019|          9.79784812E8|
+         6|          9.79784812E8|          5.9080015E7|
+2.7993852E7|    44108849|          0|          1.04080015E8|
+14-11-2019|                  14-11-2019| 7.92246861E8|          5.38|
+44161184|             06-02-2019|    4|    J384|       40|10.0|44108849|
+ 5.383929778184517|17.602170977884402|
+|        J384|Tamil Nadu|              2019|          9.79784812E8|
+         7|          9.79784812E8|          1.3578204E8|
+2.7993852E7|    93772517|          0|           1.8078204E8|
+14-11-2019|                  14-11-2019| 7.92246861E8|         11.44|
+93824853|             06-02-2019|    5|    J384|       40|12.5|93772517|
+11.438697386385403| 18.35638237530921|
++------------+----------+------------------+----------------------+--------=
+-----------+----------------------+---------------------+------------------=
+--------+------------+-----------+----------------------+------------------=
+---+----------------------------+-------------+--------------+-------------=
+--+-----------------------+-----+--------+---------+----+--------+---------=
+----------+------------------+
+only showing top 5 rows
+
+
+
+
+
+tdf=3Ddataframe.select('VPJ_Job_Code', 'Job' ,'VPJ_Valuation_Year'
+,'VPJ_Org_contract_value' ,'VPJ_Valuation_Month' ,'VPJ_Rev_contract_value',
+'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_Expected_cer=
+tified','VPJ_rev_cost','VPJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Sta=
+rt_Date')\
+.where("VPJ_Rev_contract_value-VPJ_Invoice_certified!=3D0 and
+VPJ_Job_Code=3D'8939' and VPJ_rev_cost!=3D0 and VPJ_Rev_contract_value!=3D-=
+0  and
+VPJ_Job_Code in('J384','G755','J353','J082','H653','K081') ")
+
+print(tdf.count())
+
+tdf1=3Ddataframe.select('VPJ_Job_Code', 'Job'
+,'VPJ_Valuation_Year','VPJ_Expected_certified','VPJ_Org_contract_value'
+,'VPJ_Valuation_Month' ,'VPJ_Rev_contract_value', 'VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_rev_cost','V=
+PJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date')\
+.where("VPJ_Rev_contract_value-VPJ_Invoice_certified=3D0 and
+VPJ_Job_Code=3D'8939' and VPJ_Rev_contract_value!=3D0  and VPJ_Job_Code
+in('J384','G755','J353','J082','H653','K081') ")
+print(tdf1.count())
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code','Job','VPJ_Rev_contract_valu=
+e','VPJ_Invoice_certified',\
+'VPJ_Contingency_calculated','VPJ_wip_cost','VPJ_wip_rsv','VPJ_rev_cost','V=
+PJ_CostCompPC','VPJ_Cum_Cost_AC','VPJ_Contract_Start_Date').orderBy('VPJ_Va=
+luation_Year','VPJ_Valuation_Month')
+
+tdf_row=3Dtdf1.withColumn("row_number",row_number().over(windowSpec))
+tdf_test=3Dtdf_row.select("*").where("row_number=3D'1'")
+tdf_test=3Dtdf_test.drop("row_number")
+
+tdf3=3Dtdf.union(tdf_test)
+
+windowSpec=3DWindow.partitionBy('VPJ_Job_Code').orderBy('VPJ_Valuation_Year=
+','VPJ_Valuation_Month')
+tdf4 =3D tdf3.withColumn("Month",row_number().over(windowSpec))
+
+tdf6 =3D tdf4.select([max("Month")])
+
+tdf_collect=3Dtdf6.collect()[0][0]
+
+tdf5 =3D tdf4.withColumn("POT", (tdf4["Month"]/tdf_collect)*100)
+
+tdf7 =3D tdf5.withColumn("sales" , tdf5['VPJ_wip_cost'] +
+tdf5['VPJ_wip_rsv']).withColumn("CC" ,
+(tdf5["VPJ_Cum_Cost_AC"]/(tdf5['VPJ_rev_cost']+
+tdf5['VPJ_Contingency_calculated']))*100)
+
+tdf9 =3D tdf7.withColumn("logval" , log('sales'))
+
+tdf9.show(5)
+
+
+tdf10 =3D tdf9.withColumn("VPJ_Cost_M" , col('VPJ_Cum_Cost_AC') -
+lag(col('VPJ_Cum_Cost_AC'), 1,0).over(windowSpec))
+
+tdf11 =3D tdf10.withColumn("SOI" , tdf10["sales"] -
+tdf10["VPJ_Expected_certified"])
+
+tdf12 =3D tdf11.withColumn("SP" ,(tdf11["sales"] /
+tdf11["VPJ_Org_contract_value"])*100)
+
+tdf13 =3D tdf12.where('CC >=3D 25')
+
+tdf14 =3D tdf12.withColumn("CP" , (tdf13["VPJ_Cum_Cost_AC"] /
+tdf13["VPJ_Org_contract_value"])*100 ).select('SP','POT' ,'CC','CP')
+
+tdf14.repartition(1).write.format('csv').mode('overwrite').save("/Internshi=
+p/Test/Mod2",header=3DTrue)
+'''
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+
+
+
+
+tdf_fin =3D tdf14.select('SP','POT' ,'CC','CP').where('SP !=3D0')
+from pyspark.ml.linalg import Vectors
+from pyspark.ml.feature import VectorAssembler
+
+tdf8 =3D tdf_fin.drop('SP')
+assembler =3D VectorAssembler(inputCols =3D tdf8.columns, outputCol =3D
+'features')
+output1=3Dassembler.transform(tdf_fin)
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+
+
+
+
+tdf_reg =3D output1.select(['features' , 'SP'])
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+
+
+
+
+
+
+lr_p =3D lr_model.transform(tdf_reg)
+lr_p.show()
+
+
+
+lr_p.drop('features').repartition(1).write.format('csv').mode('overwrite').=
+save("/Internship/Results/Pred1",header=3DTrue)
+op:
+FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:',
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
++--------------------+------------------+------------------+
+|            features|                SP|        prediction|
++--------------------+------------------+------------------+
+|[5.0,0.2887623310...| 0.268549069935981|0.5114764208405103|
+|[7.5,1.3776833540...|1.2812456211048107|1.5555060116832682|
+|[10.0,5.383929778...| 4.501891482677934| 5.041749793097976|
+|[12.5,11.43869738...| 9.570725719720587|10.536702164476234|
+|[15.0,57.60810346...| 54.86510603309903|51.980221393472874|
+|[17.5,64.12666366...| 61.07313367907157|59.688340003615785|
+|[20.0,82.03090822...| 78.12281968706411| 76.31488306416821|
+|[22.5,87.26379054...| 83.10633529191715| 83.67011888272945|
+|[25.0,86.99616418...| 82.85128194046756| 83.35553447432387|
+|[27.5000000000000...| 90.44873059330502| 84.44167638020932|
+|[30.0,95.40942917...| 90.86443922137465| 84.77317671721427|
+|[32.5,96.45718532...|  93.2236513378409|   86.587013050475|
+|[35.0,97.20802878...|  93.9492132074405| 87.20681427397659|
+|[37.5,98.34717797...| 95.40723764556579| 86.85248903196636|
+|[40.0,97.54381553...| 94.62845868241526| 87.39845548363938|
+|[42.5,98.05394455...| 95.13507431262366| 87.80128350894778|
+|[45.0,98.68836931...| 95.75145312621972| 88.31610558363934|
+|[47.5,98.82389843...| 95.88213988358905| 88.54630068427363|
+|[50.0,98.84618277...| 95.90352223177756| 90.05327266228407|
+|[52.5,98.85101096...| 95.90953875696535|  90.4121271443733|
++--------------------+------------------+------------------+
+only showing top 20 rows
+
+
+
+
+from pyspark.ml.evaluation import RegressionEvaluator
+lr_e =3D RegressionEvaluator(predictionCol =3D "prediction", labelCol =3D "=
+SP" ,
+metricName =3D "r2")
+print("R squared on test data =3D %g" % lr_e.evaluate(lr_p) )
+
+test_result =3D lr_model.evaluate(tdf_reg)
+print("RMSE on test data  =3D %g " % test_result.rootMeanSquaredError )
+op:FloatProgress(value=3D0.0, bar_style=3D'info', description=3D'Progress:'=
+,
+layout=3DLayout(height=3D'25px', width=3D'50%'),=E2=80=A6
+R squared on test data =3D 0.976771
+RMSE on test data  =3D 4.41196
+
